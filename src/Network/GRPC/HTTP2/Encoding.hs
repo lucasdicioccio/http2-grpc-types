@@ -8,23 +8,31 @@ module Network.GRPC.HTTP2.Encoding (
   -- * Decoding.
     decoder
   , fromDecoder
+  , decodeInput
+  , decodeOutput
   -- * Encoding.
   , encode
   , fromBuilder
+  , encodeInput
+  , encodeOutput
   -- * Compression.
   , Compression
+  , grpcCompressionHV
   , uncompressed
   , gzip
   ) where
 
 import qualified Codec.Compression.GZip as GZip
 import           Data.Binary.Builder (Builder, toLazyByteString, fromByteString, singleton, putWord32be)
-import           Data.Binary.Get (getByteString, getInt8, getWord32be, pushChunk, runGet, runGetIncremental, Decoder(..))
+import           Data.Binary.Get (getByteString, getInt8, getWord32be, runGetIncremental, Decoder(..))
 import           Data.ByteString.Char8 (ByteString)
 import qualified Data.ByteString.Char8 as ByteString
 import           Data.ByteString.Lazy (fromStrict, toStrict)
 import           Data.ProtoLens.Encoding (encodeMessage, decodeMessage)
 import           Data.ProtoLens.Message (Message)
+import           Data.ProtoLens.Service.Types (Service(..), HasMethod, HasMethodImpl(..))
+
+import           Network.GRPC.HTTP2.Types
 
 -- | Decoder for gRPC/HTTP2-encoded Protobuf messages.
 decoder :: Message a => Compression -> Decoder (Either String a)
@@ -40,9 +48,23 @@ fromDecoder (Fail _ _ msg) = Left msg
 fromDecoder (Partial _)    = Left "got only a subet of the message"
 fromDecoder (Done _ _ val) = val
 
+decodeOutput
+  :: (Service s, HasMethod s m)
+  => RPC s m
+  -> Compression
+  -> Decoder (Either String (MethodOutput s m))
+decodeOutput _ = decoder
+
+decodeInput
+  :: (Service s, HasMethod s m)
+  => RPC s m
+  -> Compression
+  -> Decoder (Either String (MethodInput s m))
+decodeInput _ = decoder
+
 -- | Encodes as binary using gRPC/HTTP2 framing.
-encode :: Message m => m -> Compression -> Builder
-encode plain compression =
+encode :: Message m => Compression -> m -> Builder
+encode compression plain =
     mconcat [ singleton (if _compressionByteSet compression then 1 else 0)
             , putWord32be (fromIntegral $ ByteString.length bin)
             , fromByteString (_compressionFunction compression $ bin)
@@ -54,6 +76,20 @@ encode plain compression =
 fromBuilder :: Builder -> ByteString
 fromBuilder = toStrict . toLazyByteString
 
+encodeInput
+  :: (Service s, HasMethod s m)
+  => RPC s m
+  -> Compression
+  -> MethodInput s m -> Builder
+encodeInput _ = encode
+
+encodeOutput
+  :: (Service s, HasMethod s m)
+  => RPC s m
+  -> Compression
+  -> MethodOutput s m -> Builder
+encodeOutput _ = encode
+
 -- | Opaque type for handling compression.
 --
 -- So far, only "pure" compression algorithms are supported.
@@ -64,6 +100,9 @@ data Compression = Compression {
   , _compressionFunction   :: (ByteString -> ByteString)
   , _decompressionFunction :: (ByteString -> ByteString)
   }
+
+grpcCompressionHV :: Compression -> HeaderValue
+grpcCompressionHV = _compressionName
 
 -- | Do not compress.
 uncompressed :: Compression

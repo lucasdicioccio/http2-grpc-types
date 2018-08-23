@@ -1,12 +1,17 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 -- | Module for GRPC <> HTTP2 mapping.
 module Network.GRPC.HTTP2.Types where
 
 import           Control.Exception (Exception)
+import           Data.ProtoLens.Service.Types (Service(..), HasMethod, HasMethodImpl(..))
+import           Data.Proxy (Proxy(..))
 import           Data.ByteString.Char8 (ByteString)
 import qualified Data.ByteString.Char8 as ByteString
+import           GHC.TypeLits (Symbol, symbolVal)
 
 -- | HTTP2 Header Key.
 type HeaderKey = ByteString
@@ -112,3 +117,30 @@ trailers (GRPCStatus s msg) =
   where
     status = ("grpc-status", trailerForStatusCode s)
     message = ("grpc-message", msg)
+
+-- | A proxy type for giving static information about RPCs.
+data RPC (s :: *) (m :: Symbol) = RPC
+
+-- | Returns the HTTP2 :path for a given RPC.
+path :: (Service s, HasMethod s m) => RPC s m -> ByteString
+{-# INLINE path #-}
+path rpc = "/" <> pkg rpc Proxy <> "." <> srv rpc Proxy <> "/" <> meth rpc Proxy
+  where
+    pkg :: (Service s) => RPC s m -> Proxy (ServicePackage s) -> ByteString
+    pkg _ p = ByteString.pack $ symbolVal p
+
+    srv :: (Service s) => RPC s m -> Proxy (ServiceName s) -> ByteString
+    srv _ p = ByteString.pack $ symbolVal p
+
+    meth :: (Service s, HasMethod s m) => RPC s m -> Proxy (MethodName s m) -> ByteString
+    meth _ p = ByteString.pack $ symbolVal p
+
+-- | Timeout in seconds.
+newtype Timeout = Timeout Int
+
+showTimeout :: Timeout -> ByteString
+showTimeout (Timeout n) = ByteString.pack $ show n ++ "S"
+
+-- | The HTTP2-Authority portion of an URL (e.g., "dicioccio.fr:7777").
+type Authority = ByteString.ByteString
+
