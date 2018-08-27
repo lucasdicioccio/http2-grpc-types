@@ -69,10 +69,10 @@ encode :: Message m => Compression -> m -> Builder
 encode compression plain =
     mconcat [ singleton (if _compressionByteSet compression then 1 else 0)
             , putWord32be (fromIntegral $ ByteString.length bin)
-            , fromByteString (_compressionFunction compression $ bin)
+            , fromByteString bin
             ]
   where
-    bin = encodeMessage plain
+    bin = _compressionFunction compression $ encodeMessage plain
 
 -- | Finalizes a Builder.
 fromBuilder :: Builder -> ByteString
