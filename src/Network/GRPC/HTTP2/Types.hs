@@ -29,7 +29,7 @@ grpcAcceptEncodingH :: HeaderKey
 grpcAcceptEncodingH = "grpc-accept-encoding"
 
 grpcAcceptEncodingHVdefault :: HeaderValue
-grpcAcceptEncodingHVdefault = "identity,gzip"
+grpcAcceptEncodingHVdefault = "identity"
 
 grpcStatusH :: HeaderKey
 grpcStatusH = "grpc-status"
