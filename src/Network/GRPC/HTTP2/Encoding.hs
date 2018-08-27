@@ -16,7 +16,9 @@ module Network.GRPC.HTTP2.Encoding (
   , encodeInput
   , encodeOutput
   -- * Compression.
-  , Compression
+  , Compression(..)
+  , Encoding(..)
+  , Decoding(..)
   , grpcCompressionHV
   , uncompressed
   , gzip
@@ -24,7 +26,7 @@ module Network.GRPC.HTTP2.Encoding (
 
 import qualified Codec.Compression.GZip as GZip
 import           Data.Binary.Builder (Builder, toLazyByteString, fromByteString, singleton, putWord32be)
-import           Data.Binary.Get (getByteString, getInt8, getWord32be, runGetIncremental, Decoder(..))
+import           Data.Binary.Get (getByteString, getInt8, getWord32be, runGetIncremental, Decoder(..), Get)
 import           Data.ByteString.Char8 (ByteString)
 import qualified Data.ByteString.Char8 as ByteString
 import           Data.ByteString.Lazy (fromStrict, toStrict)
@@ -38,9 +40,9 @@ import           Network.GRPC.HTTP2.Types
 decoder :: Message a => Compression -> Decoder (Either String a)
 decoder compression = runGetIncremental $ do
     isCompressed <- getInt8      -- 1byte
-    let decompress = if isCompressed == 0 then id else (_decompressionFunction compression)
+    let decompress = if isCompressed == 0 then pure else (_decompressionFunction compression)
     n <- getWord32be             -- 4bytes
-    decodeMessage . decompress <$> getByteString (fromIntegral n)
+    decodeMessage <$> (decompress =<< getByteString (fromIntegral n))
 
 -- | Tries finalizing a Decoder.
 fromDecoder :: Decoder (Either String a) -> Either String a
@@ -80,14 +82,16 @@ encodeInput
   :: (Service s, HasMethod s m)
   => RPC s m
   -> Compression
-  -> MethodInput s m -> Builder
+  -> MethodInput s m
+  -> Builder
 encodeInput _ = encode
 
 encodeOutput
   :: (Service s, HasMethod s m)
   => RPC s m
   -> Compression
-  -> MethodOutput s m -> Builder
+  -> MethodOutput s m
+  -> Builder
 encodeOutput _ = encode
 
 -- | Opaque type for handling compression.
@@ -98,16 +102,25 @@ data Compression = Compression {
     _compressionName       :: ByteString
   , _compressionByteSet    :: Bool
   , _compressionFunction   :: (ByteString -> ByteString)
-  , _decompressionFunction :: (ByteString -> ByteString)
+  , _decompressionFunction :: (ByteString -> Get ByteString)
   }
+
+-- | Compression for Encoding.
+newtype Encoding = Encoding { _getEncodingCompression :: Compression }
+
+-- | Compression for Decoding.
+newtype Decoding = Decoding { _getDecodingCompression :: Compression }
+
 
 grpcCompressionHV :: Compression -> HeaderValue
 grpcCompressionHV = _compressionName
 
 -- | Do not compress.
 uncompressed :: Compression
-uncompressed = Compression "identity" False id id
+uncompressed = Compression "identity" False id (\_ -> fail "decoder uninstalled")
 
 -- | Use gzip as compression.
 gzip :: Compression
-gzip = Compression "gzip" True (toStrict . GZip.compress . fromStrict) (toStrict . GZip.decompress . fromStrict)
+gzip = Compression "gzip" True
+     (toStrict . GZip.compress . fromStrict)
+     (pure . toStrict . GZip.decompress . fromStrict)
