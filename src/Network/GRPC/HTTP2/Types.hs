@@ -7,14 +7,16 @@
 module Network.GRPC.HTTP2.Types where
 
 import           Control.Exception (Exception)
+import           Data.Maybe (fromMaybe)
 import           Data.ProtoLens.Service.Types (Service(..), HasMethod, HasMethodImpl(..))
 import           Data.Proxy (Proxy(..))
 import           Data.ByteString.Char8 (ByteString)
 import qualified Data.ByteString.Char8 as ByteString
+import           Data.CaseInsensitive (CI)
 import           GHC.TypeLits (Symbol, symbolVal)
 
 -- | HTTP2 Header Key.
-type HeaderKey = ByteString
+type HeaderKey = CI ByteString
 
 -- | HTTP2 Header Value.
 type HeaderValue = ByteString
@@ -40,12 +42,6 @@ grpcMessageH = "grpc-message"
 grpcContentTypeHV :: HeaderValue
 grpcContentTypeHV = "application/grpc+proto"
 
-grpcStatusHV :: HeaderValue
-grpcStatusHV = "Grpc-Status"
-
-grpcMessageHV :: HeaderValue
-grpcMessageHV = "Grpc-Message"
-
 -- https://grpc.io/grpc/core/impl_2codegen_2status_8h.html#a35ab2a68917eb836de84cb23253108eb
 data GRPCStatusCode =
     OK
@@ -67,7 +63,7 @@ data GRPCStatusCode =
   | DATA_LOSS
   deriving (Show, Eq, Ord)
 
-trailerForStatusCode :: GRPCStatusCode -> ByteString
+trailerForStatusCode :: GRPCStatusCode -> HeaderValue
 trailerForStatusCode = \case
     OK
       -> "0"
@@ -104,43 +100,96 @@ trailerForStatusCode = \case
     DATA_LOSS
       -> "15"
 
-type GRPCStatusMessage = ByteString
+type GRPCStatusMessage = HeaderValue
 
 data GRPCStatus = GRPCStatus !GRPCStatusCode !GRPCStatusMessage
   deriving (Show, Eq, Ord)
 
 instance Exception GRPCStatus
 
-trailers :: GRPCStatus -> [(ByteString, ByteString)]
+statusCodeForTrailer :: HeaderValue -> Maybe GRPCStatusCode
+statusCodeForTrailer = \case
+    "0"
+      -> Just OK
+    "1"
+      -> Just CANCELLED
+    "2"
+      -> Just UNKNOWN
+    "3"
+      -> Just INVALID_ARGUMENT
+    "4"
+      -> Just DEADLINE_EXCEEDED
+    "5"
+      -> Just NOT_FOUND
+    "6"
+      -> Just ALREADY_EXISTS
+    "7"
+      -> Just PERMISSION_DENIED
+    "16"
+      -> Just UNAUTHENTICATED
+    "8"
+      -> Just RESOURCE_EXHAUSTED
+    "9"
+      -> Just FAILED_PRECONDITION
+    "10"
+      -> Just ABORTED
+    "11"
+      -> Just OUT_OF_RANGE
+    "12"
+      -> Just UNIMPLEMENTED
+    "13"
+      -> Just INTERNAL
+    "14"
+      -> Just UNAVAILABLE
+    "15"
+      -> Just DATA_LOSS
+    _
+      -> Nothing
+
+-- | Trailers for a GRPCStatus.
+trailers :: GRPCStatus -> [(HeaderKey, HeaderValue)]
 trailers (GRPCStatus s msg) =
     if ByteString.null msg then [status] else [status, message]
   where
-    status = ("grpc-status", trailerForStatusCode s)
-    message = ("grpc-message", msg)
+    status = (grpcStatusH, trailerForStatusCode s)
+    message = (grpcMessageH, msg)
+
+-- | In case a server replies with a gRPC status/message pair un-understood by this library.
+data InvalidGRPCStatus = InvalidGRPCStatus [(HeaderKey, HeaderValue)]
+  deriving (Show, Eq, Ord)
+
+instance Exception InvalidGRPCStatus
+
+-- | Read a 'GRPCStatus' from HTTP2 trailers.
+readTrailers :: [(HeaderKey, HeaderValue)] -> Either InvalidGRPCStatus GRPCStatus
+readTrailers pairs = maybe (Left $ InvalidGRPCStatus pairs) Right $ do
+    status <- statusCodeForTrailer =<< lookup grpcStatusH pairs
+    return $ GRPCStatus status message
+  where
+    message = fromMaybe "" (lookup grpcMessageH pairs)
 
 -- | A proxy type for giving static information about RPCs.
 data RPC (s :: *) (m :: Symbol) = RPC
 
 -- | Returns the HTTP2 :path for a given RPC.
-path :: (Service s, HasMethod s m) => RPC s m -> ByteString
+path :: (Service s, HasMethod s m) => RPC s m -> HeaderValue
 {-# INLINE path #-}
 path rpc = "/" <> pkg rpc Proxy <> "." <> srv rpc Proxy <> "/" <> meth rpc Proxy
   where
-    pkg :: (Service s) => RPC s m -> Proxy (ServicePackage s) -> ByteString
+    pkg :: (Service s) => RPC s m -> Proxy (ServicePackage s) -> HeaderValue
     pkg _ p = ByteString.pack $ symbolVal p
 
-    srv :: (Service s) => RPC s m -> Proxy (ServiceName s) -> ByteString
+    srv :: (Service s) => RPC s m -> Proxy (ServiceName s) -> HeaderValue
     srv _ p = ByteString.pack $ symbolVal p
 
-    meth :: (Service s, HasMethod s m) => RPC s m -> Proxy (MethodName s m) -> ByteString
+    meth :: (Service s, HasMethod s m) => RPC s m -> Proxy (MethodName s m) -> HeaderValue
     meth _ p = ByteString.pack $ symbolVal p
 
 -- | Timeout in seconds.
 newtype Timeout = Timeout Int
 
-showTimeout :: Timeout -> ByteString
+showTimeout :: Timeout -> HeaderValue
 showTimeout (Timeout n) = ByteString.pack $ show n ++ "S"
 
 -- | The HTTP2-Authority portion of an URL (e.g., "dicioccio.fr:7777").
-type Authority = ByteString.ByteString
-
+type Authority = HeaderValue
